@@ -38,7 +38,7 @@ def fetch(url: str, dest: pathlib.Path, force: bool = False) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--years", type=int, nargs="*",
-                        default=list(range(2017, dt.date.today().year + 1)))
+                        default=list(range(2002, dt.date.today().year + 1)))
     parser.add_argument("--force", action="store_true", help="re-download today's files")
     args = parser.parse_args()
 

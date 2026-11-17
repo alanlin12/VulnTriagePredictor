@@ -79,7 +79,7 @@ CVE (about 400,000) to `data.nosync/processed/nvd.parquet`. Takes about a minute
 | `cve_id` | CVE identifier |
 | `source` | the CNA (organization) that filed the CVE |
 | `published` | NVD publication date (datetime) |
-| `status` | NVD analysis status |
+| `leak_status` | NVD analysis status today (added after publication: analysis only, never a feature) |
 | `description` | English description |
 
 Inspect the result:

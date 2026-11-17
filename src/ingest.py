@@ -1,9 +1,3 @@
-"""Download raw snapshots: CISA KEV (labels) + NVD CVE 2.0 yearly feeds (features).
-
-    python src/ingest.py                    # KEV + NVD 2017..this year
-    python src/ingest.py --years 2023 2024  # only some NVD years
-"""
-
 import argparse
 import datetime as dt
 import pathlib
@@ -41,12 +35,16 @@ def main() -> None:
                         default=list(range(2002, dt.date.today().year + 1)))
     parser.add_argument("--force", action="store_true", help="re-download today's files")
     args = parser.parse_args()
+    run(args.years, args.force)
 
+
+def run(years: list[int] | None = None, force: bool = False) -> None:
+    years = years or list(range(2002, dt.date.today().year + 1))
     today = dt.date.today().isoformat()                # "2026-10-29"
-    fetch(KEV_URL, RAW / "kev" / f"kev_{today}.json", args.force)
-    for year in args.years:
+    fetch(KEV_URL, RAW / "kev" / f"kev_{today}.json", force)
+    for year in years:
         fetch(NVD_URL.format(year=year),
-            RAW / "nvd" / f"nvdcve-2.0-{year}_{today}.json.gz", args.force)
+            RAW / "nvd" / f"nvdcve-2.0-{year}_{today}.json.gz", force)
 
 
 if __name__ == "__main__":

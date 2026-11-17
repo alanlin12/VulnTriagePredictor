@@ -1,4 +1,3 @@
-"""Flatten NVD records into one row per CVE -> data.nosync/processed/nvd.parquet."""
 import gzip
 import json
 import pathlib
@@ -41,32 +40,35 @@ def pick_cvss(cve: dict) -> tuple[str, dict]:
     return "none", {}
 
 
-def pick_cwe(cve: dict) -> str | None:
-    """First CWE ID, the CNA's before NVD's. NVD-CWE-noinfo / NVD-CWE-Other count as unknown."""
+def pick_cwe(cve: dict) -> tuple[str, str | None]:
+    """(who filed it, first CWE ID): the CNA's before NVD's. NVD-CWE-noinfo / NVD-CWE-Other count as unknown."""
     weaknesses = cve.get("weaknesses", [])
-    for source in (cve["sourceIdentifier"], "nvd@nist.gov"):
+    for name, source in (("cna", cve["sourceIdentifier"]), ("nvd", "nvd@nist.gov")):
         for w in weaknesses:
             if w["source"] == source:
                 for d in w["description"]:
                     if d["value"].startswith("CWE-"):
-                        return d["value"]
-    return None
+                        return name, d["value"]
+    return "none", None
 
 
-def pick_vendor_product(cve: dict) -> tuple[str | None, str | None]:
-    """Vendor/product as the CNA filed them; NVD's CPE string as fallback."""
+def pick_vendor_product(cve: dict) -> tuple[str, str | None, str | None]:
+    """(who filed it, vendor, product): the CNA's own values; NVD's CPE string as fallback.
+
+    The CPE list is written by NVD analysts AFTER publication, so the source is kept ("cna" / "nvd").
+    """
     for a in cve.get("affected", []):
         if a["source"] == cve["sourceIdentifier"]:
             for item in a.get("affectedData", []):
                 vendor = (item.get("vendor") or "").lower()
                 if vendor not in PLACEHOLDERS:
-                    return vendor, (item.get("product") or "").lower() or None
+                    return "cna", vendor, (item.get("product") or "").lower() or None
     for config in cve.get("configurations", []):
         for node in config["nodes"]:
             for match in node["cpeMatch"]:
                 parts = match["criteria"].split(":")   # cpe:2.3:a:vendor:product:...
-                return parts[3], parts[4]
-    return None, None
+                return "nvd", parts[3], parts[4]
+    return "none", None, None
 
 
 def english_description(cve: dict) -> str:
@@ -87,9 +89,15 @@ def ssvc_exploitation(cve: dict) -> str | None:
 
 
 def row(cve: dict) -> dict:
-    """One CVE as a flat dict of what was known at publication, plus leak_ columns for analysis."""
+    """One CVE as a flat dict, plus leak_ columns for analysis.
+
+    cvss_*, cwe and vendor/product each come with a *_source column: "cna" values were filed by the
+    reporting organization, "nvd" values were added later by NVD analysts. NVD analyzes exploited CVEs
+    first, so whether an NVD value exists at all leaks the label. at_publication() blanks them.
+    """
     cvss_source, cvss = pick_cvss(cve)
-    vendor, product = pick_vendor_product(cve)
+    cwe_source, cwe = pick_cwe(cve)
+    vendor_source, vendor, product = pick_vendor_product(cve)
     references = cve.get("references", [])
 
     return {
@@ -97,7 +105,6 @@ def row(cve: dict) -> dict:
         "cve_id":      cve["id"],
         "source":      cve["sourceIdentifier"],
         "published":   cve["published"],
-        "status":      cve["vulnStatus"],
         "description": english_description(cve),
 
         # severity (CVSS v3)
@@ -106,15 +113,30 @@ def row(cve: dict) -> dict:
         **{column: cvss.get(key) for key, column in CVSS_FIELDS.items()},
 
         # weakness type and affected product
-        "cwe":     pick_cwe(cve),
-        "vendor":  vendor,
-        "product": product,
+        "cwe_source":    cwe_source,
+        "cwe":           cwe,
+        "vendor_source": vendor_source,
+        "vendor":        vendor,
+        "product":       product,
 
         # added AFTER publication: analysis only, never features
+        "leak_status":            cve["vulnStatus"],   # NVD's analysis state today; "Analyzed" tracks KEV
         "leak_ssvc_exploitation": ssvc_exploitation(cve),
         "leak_exploit_ref":       any("Exploit" in r.get("tags", []) for r in references),
         "leak_cisa_kev":          "cisaExploitAdd" in cve,
     }
+
+def at_publication(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df holding only what the CNA filed: NVD-added CVSS / CWE / vendor become missing, leak_ columns go.
+
+    Use this view for anything a model or baseline sees. Label columns (y, kev_date, ...) are left alone.
+    """
+    out = df.drop(columns=[c for c in df.columns if c.startswith("leak_")])
+    out.loc[out.cvss_source != "cna", ["cvss_score", *CVSS_FIELDS.values()]] = None
+    out.loc[out.cwe_source != "cna", "cwe"] = None
+    out.loc[out.vendor_source != "cna", ["vendor", "product"]] = None
+    return out
+
 
 def load_year(year: int) -> list[dict]:
     path = newest(RAW / "nvd", f"nvdcve-2.0-{year}_*.json.gz")
